@@ -12,7 +12,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # 2. Tokens & Keys Configuration
 TELEGRAM_BOT_TOKEN = "8411023752:AAFJGMStLQLM3CySiOCbcMxb7oU91rGwbhk"
 
-# 99 Gemini API Keys Rotation List (የላክሃቸው 99 ቁልፎች በሙሉ እዚህ ተካተዋል)
+# 99 Gemini API Keys Rotation List (የላክሃቸው 99 ቁልፎች በሙሉ እንዳሉ ናቸው)
 GEMINI_API_KEYS = [
     "AQ.Ab8RN6JWpbUdI4tfJKwpv6fPpSSvKb9KaJcMRjf8VC5fcs7YVg",
     "AQ.Ab8RN6L_g9N4Gkoo_xODqFZZbNuHQAOXayy_8Ca6X6LmxSWfQA",
@@ -122,11 +122,16 @@ def get_next_gemini_model():
     if not GEMINI_API_KEYS:
         return None
     
+    # በየተራ ከ 99ኙ Keys አንዱን መምረጫ (Rotation)
     key = GEMINI_API_KEYS[current_key_index]
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     
-    genai.configure(api_key=key)
-    return genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        genai.configure(api_key=key)
+        return genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        logging.error(f"Error configuring Gemini with key: {e}")
+        return None
 
 def is_amharic(text):
     return bool(re.search(r'[\u1200-\u137F]', text))
@@ -137,11 +142,12 @@ def search_books_db(query, grade):
     try:
         conn = sqlite3.connect('books.db')
         cursor = conn.cursor()
-        sql_query = "SELECT text FROM data WHERE text LIKE ? LIMIT 1"
+        # Case-insensitive ጥብቅ ያልሆነ ፍለጋ
+        sql_query = "SELECT text FROM data WHERE LOWER(text) LIKE LOWER(?) LIMIT 1"
         cursor.execute(sql_query, ('%' + query + '%',))
         row = cursor.fetchone()
         conn.close()
-        if row:
+        if row and row[0]:
             return row[0]
     except Exception as e:
         logging.error(f"Database Search Error: {e}")
@@ -182,29 +188,32 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response_text = None
 
+    # 1. መጀመሪያ ዳታቤዝ (መጽሐፉ) ውስጥ መፈለግ
     db_result = search_books_db(user_text, user_grade)
     if db_result:
         response_text = db_result
 
+    # 2. መጽሐፉ ላይ ካላገኘ በ 99ኙ Gemini API Keys ተጠቅሞ መፈለግ
     if not response_text:
         try:
             model = get_next_gemini_model()
             if model:
-                system_prompt = (
-                    f"You are FAF ELA AI, an educational assistant for Ethiopian high school students (Grade {user_grade}). "
-                    "Understand input whether written in Amharic (Fidel), Latin/Amharic-Latin (Geez-Romaja), or broken phrasing. "
-                    "If the user asks in Amharic or Latin-Amharic, answer in clean Amharic. If in English, answer in English. "
-                    "If 'answer only' or 'መልስ ብቻ' is present, provide ONLY the concise final answer."
+                prompt = (
+                    f"You are FAF ELA AI, an educational assistant for Ethiopian high school students (Grade {user_grade}).\n"
+                    f"User Question: {user_text}\n\n"
+                    "Instructions:\n"
+                    "- Answer accurately based on high school level content.\n"
+                    "- If the user asks in Amharic, respond in Amharic. If in English, respond in English."
                 )
-                prompt = f"{system_prompt}\n\nUser Question: {user_text}"
                 ai_response = model.generate_content(prompt)
                 if ai_response and ai_response.text:
                     response_text = ai_response.text
         except Exception as e:
             logging.error(f"Gemini API Error: {e}")
 
+    # 3. በሁለቱም ካላገኘ
     if not response_text:
-        response_text = "ይቅርታ፣ ተዛማጅ መረጃ ማግኘት አልተቻለም። እባክዎን ጥያቄዎን አስተካክለው ይጻፉ።" if amharic_input else "Sorry, no relevant information could be found. Please rephrase your query."
+        response_text = "ይቅርታ፣ ጥያቄውን መመለስ አልተቻለም። እባክዎን ጥያቄዎን አስተካክለው ይጻፉ።" if amharic_input else "Sorry, I couldn't generate an answer for this prompt. Please try rephrasing your question."
 
     await status_msg.delete()
     await update.message.reply_text(response_text)
