@@ -2,17 +2,17 @@ import os
 import re
 import sqlite3
 import logging
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import google.generativeai as genai
 
 # 1. Logging Setup
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# 2. Tokens & Keys Configuration
+# 2. Telegram Bot Token
 TELEGRAM_BOT_TOKEN = "8411023752:AAFJGMStLQLM3CySiOCbcMxb7oU91rGwbhk"
 
-# 99 Gemini API Keys Rotation List (የላክሃቸው 99 ቁልፎች በሙሉ እንዳሉ ናቸው)
+# 3. 99 Gemini API Keys List
 GEMINI_API_KEYS = [
     "AQ.Ab8RN6JWpbUdI4tfJKwpv6fPpSSvKb9KaJcMRjf8VC5fcs7YVg",
     "AQ.Ab8RN6L_g9N4Gkoo_xODqFZZbNuHQAOXayy_8Ca6X6LmxSWfQA",
@@ -117,20 +117,33 @@ GEMINI_API_KEYS = [
 
 current_key_index = 0
 
-def get_next_gemini_model():
+def call_gemini_rest_api(prompt):
     global current_key_index
     if not GEMINI_API_KEYS:
         return None
     
-    # በየተራ ከ 99ኙ Keys አንዱን መምረጫ (Rotation)
-    key = GEMINI_API_KEYS[current_key_index]
+    # 99ኙን Keys በየተራ በመቀያየር መጠቀሚያ (Rotation)
+    api_key = GEMINI_API_KEYS[current_key_index]
     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
     
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+    
     try:
-        genai.configure(api_key=key)
-        return genai.GenerativeModel('gemini-1.5-flash')
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data['candidates'][0]['content']['parts'][0]['text']
+        else:
+            logging.error(f"API Error Status {response.status_code}: {response.text}")
+            return None
     except Exception as e:
-        logging.error(f"Error configuring Gemini with key: {e}")
+        logging.error(f"Request Error: {e}")
         return None
 
 def is_amharic(text):
@@ -142,7 +155,6 @@ def search_books_db(query, grade):
     try:
         conn = sqlite3.connect('books.db')
         cursor = conn.cursor()
-        # Case-insensitive ጥብቅ ያልሆነ ፍለጋ
         sql_query = "SELECT text FROM data WHERE LOWER(text) LIKE LOWER(?) LIMIT 1"
         cursor.execute(sql_query, ('%' + query + '%',))
         row = cursor.fetchone()
@@ -188,32 +200,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response_text = None
 
-    # 1. መጀመሪያ ዳታቤዝ (መጽሐፉ) ውስጥ መፈለግ
+    # 1. መጀመሪያ በ SQLite ዳታቤዝ (መጽሐፉ) ውስጥ መፈለግ
     db_result = search_books_db(user_text, user_grade)
     if db_result:
         response_text = db_result
 
-    # 2. መጽሐፉ ላይ ካላገኘ በ 99ኙ Gemini API Keys ተጠቅሞ መፈለግ
+    # 2. መጽሐፉ ላይ ካላገኘ በ Gemini REST API መፈለግ
     if not response_text:
-        try:
-            model = get_next_gemini_model()
-            if model:
-                prompt = (
-                    f"You are FAF ELA AI, an educational assistant for Ethiopian high school students (Grade {user_grade}).\n"
-                    f"User Question: {user_text}\n\n"
-                    "Instructions:\n"
-                    "- Answer accurately based on high school level content.\n"
-                    "- If the user asks in Amharic, respond in Amharic. If in English, respond in English."
-                )
-                ai_response = model.generate_content(prompt)
-                if ai_response and ai_response.text:
-                    response_text = ai_response.text
-        except Exception as e:
-            logging.error(f"Gemini API Error: {e}")
+        prompt = (
+            f"You are FAF ELA AI, an educational assistant for Ethiopian high school students (Grade {user_grade}).\n"
+            f"User Question: {user_text}\n\n"
+            "Instructions:\n"
+            "- Answer accurately based on high school level content.\n"
+            "- If the user asks in Amharic, respond in Amharic. If in English, respond in English."
+        )
+        response_text = call_gemini_rest_api(prompt)
 
     # 3. በሁለቱም ካላገኘ
     if not response_text:
-        response_text = "ይቅርታ፣ ጥያቄውን መመለስ አልተቻለም። እባክዎን ጥያቄዎን አስተካክለው ይጻፉ።" if amharic_input else "Sorry, I couldn't generate an answer for this prompt. Please try rephrasing your question."
+        response_text = (
+            "ይቅርታ፣ ጥያቄውን መመለስ አልተቻለም። እባክዎን ጥያቄዎን አስተካክለው ይጻፉ።" 
+            if amharic_input else 
+            "Sorry, I couldn't generate an answer for this prompt. Please try rephrasing your question."
+        )
 
     await status_msg.delete()
     await update.message.reply_text(response_text)
