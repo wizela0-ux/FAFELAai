@@ -1,129 +1,190 @@
 import os
 import sqlite3
 import logging
-import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
+import google.generativeai as genai
+from PIL import Image
+import io
 
-# 1. Logging Setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Logging configuration
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# 2. Telegram Bot Token
-TELEGRAM_BOT_TOKEN = "8411023752:AAFJGMStLQLM3CySiOCbcMxb7oU91rGwbhk"
+# 1. ENVIRONMENT VARIABLES
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+GEMINI_KEYS_RAW = os.getenv("GEMINI_KEYS", "")
 
-# 3. Groq API Key (ከ console.groq.com ያወጣኸውን gsk_... ቁልፍ እዚህ አስገባ)
-GROQ_API_KEY = "YOUR_GROQ_API_KEY_HERE"
+# Parse 99 Gemini API Keys
+API_KEYS = [key.strip() for key in GEMINI_KEYS_RAW.split(",") if key.strip()]
+current_key_index = 0
 
-def call_groq_api(prompt):
-    if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE":
-        return None
+def get_next_gemini_model(keys_list):
+    """Rotates through 99 API keys dynamically on rate limits (Error 429)."""
+    global current_key_index
+    if not keys_list:
+        raise ValueError("No Gemini API keys provided in GEMINI_KEYS environment variable.")
     
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "llama3-8b-8192",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
-    }
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data['choices'][0]['message']['content']
-        else:
-            logging.error(f"Groq API Error: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        logging.error(f"Request Error: {e}")
-        return None
+    key = keys_list[current_key_index]
+    current_key_index = (current_key_index + 1) % len(keys_list)
+    genai.configure(api_key=key)
+    return genai.GenerativeModel('gemini-1.5-flash')
 
-def search_books_db(query):
-    if not os.path.exists('books.db'):
-        return None
+# 2. RAG DATABASE SEARCH (books.db)
+DB_PATH = "books.db"
+
+def search_textbook_db(query, limit=3):
+    """Searches textbook_data table for relevant content."""
+    if not os.path.exists(DB_PATH):
+        return ""
     try:
-        conn = sqlite3.connect('books.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # ዳታቤዝ ውስጥ በቀጥታ መፈለግ
-        sql_query = "SELECT content FROM textbook_data WHERE LOWER(content) LIKE LOWER(?) LIMIT 1"
-        cursor.execute(sql_query, ('%' + query + '%',))
-        row = cursor.fetchone()
+        cursor.execute(
+            "SELECT book_name, page_number, content FROM textbook_data WHERE content LIKE ? LIMIT ?",
+            (f"%{query}%", limit)
+        )
+        results = cursor.fetchall()
         conn.close()
         
-        if row and row[0]:
-            return row[0]
+        context_text = ""
+        for book, page, content in results:
+            context_text += f"\n--- [{book} - Page {page}] ---\n{content}\n"
+        return context_text
     except Exception as e:
-        logging.error(f"Database Search Error: {e}")
-    return None
+        logger.error(f"Database search error: {e}")
+        return ""
+
+# 3. SYSTEM PROMPT
+SYSTEM_PROMPT = """
+You are 'FAF ELA AI' (ፋፍ ኤላ ኤአይ), an elite educational assistant created for Ethiopian high school students (Grades 9-12).
+Rules:
+1. Always respond in the exact language used by the user (Amharic Ge'ez script, Latin/Fideliz Amharic, or English).
+2. Use the provided textbook context from Ethiopian curriculum when available.
+3. If context is missing, use your foundational internal knowledge smoothly without explicitly stating that data was missing.
+4. Provide step-by-step clear explanations for mathematical, scientific, or complex questions.
+5. Keep explanations warm, encouraging, concise, and structured with bullet points.
+"""
+
+# 4. TELEGRAM BOT HANDLERS
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = (
-        "👋 **እንኳን ወደ FAF ELA AI ቦት በሰላም መጡ!**\n\n"
-        "ከ9ኛ - 12ኛ ክፍል ባሉት ትምህርቶች ላይ የተዘጋጀ የ AI ረዳት ነው።\n"
-        "እባክዎን ክፍሎትን ይምረጡ፦"
-    )
+    """Handler for /start command with interactive main menu."""
+    user = update.effective_user
     keyboard = [
-        [InlineKeyboardButton("9ኛ ክፍል", callback_data='grade_9'), InlineKeyboardButton("10ኛ ክፍል", callback_data='grade_10')],
-        [InlineKeyboardButton("11ኛ ክፍል", callback_data='grade_11'), InlineKeyboardButton("12ኛ ክፍል", callback_data='grade_12')]
+        [InlineKeyboardButton("📚 ክፍል እና ትምህርት ምረጥ (Select Subject)", callback_data="select_grade")],
+        [InlineKeyboardButton("📝 ኪውዝ / ፈተናዎች (Take Quiz)", callback_data="start_quiz")],
+        [InlineKeyboardButton("ℹ️ ስለ ቦቱ (About FAF ELA AI)", callback_data="about_bot")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+    
+    welcome_text = (
+        f"ሰላም {user.first_name}! 👋\n\n"
+        f"እንኳን ወደ **FAF ELA AI** የትምህርት ረዳት ቦት በሰላም መጣህ/ሽ!\n"
+        f"ከ 9ኛ እስከ 12ኛ ክፍል ያሉ ማንኛውንም ጥያቄዎች በጽሁፍ ወይም በፎቶ መጠየቅ ትችላለህ/ሽ።\n\n"
+        f"ለመጀመር ከስር ካሉት አማራጮች አንዱን መረጥ፦"
+    )
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-async def grade_selection_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles inline button interactions."""
     query = update.callback_query
     await query.answer()
     
-    selected_grade = query.data.split('_')[1]
-    context.user_data['grade'] = selected_grade
-    
-    msg = f"✅ **{selected_grade}ኛ ክፍል ተመርጧል።**\nአሁን ጥያቄዎን በጽሑፍ መላክ ይችላሉ።"
-    await query.edit_message_text(msg, parse_mode=constants.ParseMode.MARKDOWN)
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text.strip()
-    user_grade = context.user_data.get('grade', '9')
-    
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
-    status_msg = await update.message.reply_text("🔍 በመፈለግ ላይ...")
-
-    response_text = None
-
-    # 1. መጀመሪያ በ SQLite ዳታቤዝ ውስጥ መፈለግ
-    db_result = search_books_db(user_text)
-    if db_result:
-        response_text = f"📚 **ከመጽሐፉ የተገኘ መልስ፦**\n\n{db_result}"
-
-    # 2. ዳታቤዝ ላይ ካላገኘ በ Groq AI መፈለግ
-    if not response_text:
-        prompt = (
-            f"You are FAF ELA AI, an educational assistant for Ethiopian high school students (Grade {user_grade}).\n"
-            f"User Question: {user_text}\n\n"
-            "Instructions:\n"
-            "- Answer accurately based on high school level content.\n"
-            "- If asked in Amharic, respond in Amharic. If in English, respond in English."
+    if query.data == "select_grade":
+        keyboard = [
+            [InlineKeyboardButton("Grade 9", callback_data="g9"), InlineKeyboardButton("Grade 10", callback_data="g10")],
+            [InlineKeyboardButton("Grade 11", callback_data="g11"), InlineKeyboardButton("Grade 12", callback_data="g12")],
+            [InlineKeyboardButton("🔙 ዋና ማውጫ", callback_data="main_menu")]
+        ]
+        await query.edit_message_text("እባክህ የምትማርበትን ክፍል ምረጥ፦", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    elif query.data == "about_bot":
+        about_text = (
+            "🤖 **FAF ELA AI Assistant**\n\n"
+            "ይህ ቦት የኢትዮጵያን የ 9ኛ-12ኛ ክፍል አዲሱን እና የቆየውን ካሪኩለም መሰረት በማድረግ የተሰራ የኤአይ የትምህርት ረዳት ነው[span_5](start_span)[span_5](end_span)።\n"
+            "ማንኛውንም ጥያቄ በጽሁፍ፣ በፎቶ ወይም በድምጽ መጠየቅ ትችላለህ!"
         )
-        response_text = call_groq_api(prompt)
+        keyboard = [[InlineKeyboardButton("🔙 ዋና ማውጫ", callback_data="main_menu")]]
+        await query.edit_message_text(about_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    elif query.data == "main_menu":
+        keyboard = [
+            [InlineKeyboardButton("📚 ክፍል እና ትምህርት ምረጥ (Select Subject)", callback_data="select_grade")],
+            [InlineKeyboardButton("📝 ኪውዝ / ፈተናዎች (Take Quiz)", callback_data="start_quiz")],
+            [InlineKeyboardButton("ℹ️ ስለ ቦቱ (About FAF ELA AI)", callback_data="about_bot")]
+        ]
+        await query.edit_message_text("ዋና ማውጫ፦", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 3. በሁለቱም ካላገኘ
-    if not response_text:
-        response_text = "ይቅርታ፣ ጥያቄውን መመለስ አልተቻለም። እባክዎን ጥያቄዎን አስተካክለው ይጻፉ።"
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles student text and photo queries with Gemini API failover rotation."""
+    user_text = update.message.text or update.message.caption or ""
+    photo = update.message.photo
+    
+    status_msg = await update.message.reply_text("🤔 በማሰብ ላይ ነው... እባክህ ትንሽ ጠብቅ...")
+    
+    # Extract Context from books.db
+    db_context = search_textbook_db(user_text) if user_text else ""
+    
+    prompt = f"{SYSTEM_PROMPT}\n\n"
+    if db_context:
+        prompt += f"Use this textbook context if relevant:\n{db_context}\n\n"
+    prompt += f"Student Query: {user_text}"
+    
+    # Process image if uploaded
+    image_data = None
+    if photo:
+        file = await context.bot.get_file(photo[-1].file_id)
+        image_bytes = await file.download_as_bytearray()
+        image_data = Image.open(io.BytesIO(image_bytes))
 
-    await status_msg.delete()
-    await update.message.reply_text(response_text)
+    # Execute Gemini API call with 99-key rotation fallback
+    success = False
+    attempts = 0
+    max_attempts = len(API_KEYS) if API_KEYS else 1
+    
+    while not success and attempts < max_attempts:
+        try:
+            model = get_next_gemini_model(API_KEYS)
+            if image_data:
+                response = model.generate_content([prompt, image_data])
+            else:
+                response = model.generate_content(prompt)
+            
+            await status_msg.edit_text(response.text)
+            success = True
+        except Exception as e:
+            logger.warning(f"Gemini API Key failed (Attempt {attempts + 1}): {e}")
+            attempts += 1
+            
+    if not success:
+        await status_msg.edit_text("❌ ይቅርታ፣ በአሁኑ ሰዓት መልስ መስጠት አልተቻለም። እባክህ ትንሽ ቆይተህ ድጋሚ ሞክር።")
 
+# 5. MAIN EXECUTION
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler('start', start_command))
-    app.add_handler(CallbackQueryHandler(grade_selection_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    print("🤖 FAF ELA AI Bot is running successfully...")
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN is missing! Please set it in Render Environment Variables.")
+        return
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+
+    logger.info("FAF ELA AI Bot is starting...")
     app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
