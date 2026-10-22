@@ -53,13 +53,14 @@ async def fb_get(path: str):
             if resp.status == 200:
                 return await resp.json()
     return None
-
 async def fb_put(path: str, data):
     if not FIREBASE_DB_URL:
         return
     url = f"{FIREBASE_DB_URL}/{path}.json"
     async with aiohttp.ClientSession() as session:
-        async with session.put(url, json=data)
+        async with session.put(url, json=data) as resp:
+            pass
+
 
 async def save_user(user_id: int, username: str, first_name: str, lang: str = "am"):
     user_data = {
