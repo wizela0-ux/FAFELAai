@@ -7,8 +7,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 # ==========================================
@@ -42,7 +40,7 @@ STRINGS = {
         'btn_back': "⬅️ ተመለስ (Back)",
         'btn_try_again': "🔄 እንደገና ሞክር (Try Again)",
         'select_grade': "እባክዎ ክፍልዎን ይምረጡ፡",
-        'select_stream': "እባክዎ ዘርፍዎን (Stream) ይምረጡ፡",
+        'select_stream': "እባክዎ ዘርፍዎን ይምረጡ፡",
         'select_subject': "እባክዎ የትምህርት ዓይነት ይምረጡ፡",
         'select_unit': "እባክዎ ዩኒት ይምረጡ፡",
         'no_questions': "ለጊዜው በዚህ ዩኒት ምንም ጥያቄ አልተለቀቀም።",
@@ -95,7 +93,7 @@ SAMPLE_QUESTIONS = [
             "C) Both are identical",
             "D) None of the above"
         ],
-        "correct": 1, # Index B
+        "correct": 1,
         "exp_am": "Sequence ማለት የተከታተሉ ቁጥሮች ዝርዝር ሲሆን Series ደግሞ የእነዚያ ቁጥሮች ድምር ነው።",
         "exp_en": "A sequence is an ordered list of numbers, whereas a series is the sum of the terms of a sequence."
     },
@@ -105,7 +103,7 @@ SAMPLE_QUESTIONS = [
         "question_en": "2. What symbol represents the common difference in an Arithmetic Sequence?",
         "options_am": ["A) r", "B) d", "C) S_n", "D) a_n"],
         "options_en": ["A) r", "B) d", "C) S_n", "D) a_n"],
-        "correct": 1, # Index B
+        "correct": 1,
         "exp_am": "በ Arithmetic Sequence ውስጥ የጋራ ልዩነት በ 'd' ይወከላል።",
         "exp_en": "In an Arithmetic Sequence, the common difference is represented by 'd'."
     },
@@ -115,7 +113,7 @@ SAMPLE_QUESTIONS = [
         "question_en": "3. What is the 10th term (a_10) of the sequence 2, 4, 6, 8, ...?",
         "options_am": ["A) 18", "B) 20", "C) 22", "D) 24"],
         "options_en": ["A) 18", "B) 20", "C) 22", "D) 24"],
-        "correct": 1, # Index B
+        "correct": 1,
         "exp_am": "a_n = a_1 + (n-1)d -> a_10 = 2 + (9)(2) = 20።",
         "exp_en": "a_n = a_1 + (n-1)d -> a_10 = 2 + (9)(2) = 20."
     },
@@ -125,8 +123,8 @@ SAMPLE_QUESTIONS = [
         "question_en": "4. What defines a Geometric Sequence?",
         "options_am": [
             "A) የጋራ ድምር በማኖር",
-            "C) የጋራ ብዜት/ሬሺዮ (Common Ratio 'r') በማኖር",
-            "B) የጋራ ልዩነት በማኖር",
+            "B) የጋራ ብዜት/ሬሺዮ (Common Ratio 'r') በማኖር",
+            "C) የጋራ ልዩነት በማኖር",
             "D) በምንም"
         ],
         "options_en": [
@@ -135,7 +133,7 @@ SAMPLE_QUESTIONS = [
             "C) Having a common sum",
             "D) None"
         ],
-        "correct": 1, # Index B
+        "correct": 1,
         "exp_am": "Geometric Sequence ተከታታይ ውሎች በጋራ ብዜት (r) እየተባዙ ይሄዳሉ።",
         "exp_en": "A Geometric Sequence is formed by multiplying the previous term by a common ratio 'r'."
     },
@@ -145,17 +143,17 @@ SAMPLE_QUESTIONS = [
         "question_en": "5. What is the sum of 1 + 2 + 3 + ... + 10?",
         "options_am": ["A) 45", "B) 50", "C) 55", "D) 60"],
         "options_en": ["A) 45", "B) 50", "C) 55", "D) 60"],
-        "correct": 2, # Index C
+        "correct": 2,
         "exp_am": "S_n = n(n+1)/2 -> S_10 = 10(11)/2 = 55።",
         "exp_en": "S_n = n(n+1)/2 -> S_10 = 10(11)/2 = 55."
     }
 ]
 
 # ==========================================
-# 4. BOT HELPER FUNCTIONS
+# 4. HELPER FUNCTIONS
 # ==========================================
 async def edit_or_send(update: Update, text: str, reply_markup=None):
-    """ Helper to keep chat clean by editing existing message """
+    """ Cleans chat by replacing current message or sending new one """
     query = update.callback_query
     if query:
         await query.answer()
@@ -165,10 +163,19 @@ async def edit_or_send(update: Update, text: str, reply_markup=None):
 
 
 # ==========================================
-# 5. HANDLERS
+# 5. COMMAND & MENU HANDLERS
 # ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ Handle /start command """
+    lang = context.user_data.get('lang')
+    if not lang:
+        await cmd_lang(update, context)
+    else:
+        await show_main_menu(update, context)
+
+
+async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Handle /lang command """
     keyboard = [
         [InlineKeyboardButton("🇪🇹 አማርኛ", callback_data="lang_am")],
         [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
@@ -179,7 +186,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Main Menu Screen """
+    """ Show Main Menu with current user language """
     lang = context.user_data.get('lang', 'am')
     user_name = update.effective_user.first_name
 
@@ -193,39 +200,48 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await edit_or_send(update, welcome_txt, InlineKeyboardMarkup(keyboard))
 
 
+async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Handle /quiz command or Quiz button """
+    lang = context.user_data.get('lang', 'am')
+    keyboard = [
+        [InlineKeyboardButton("📌 Grade 9", callback_data="grade_9"), InlineKeyboardButton("📌 Grade 10", callback_data="grade_10")],
+        [InlineKeyboardButton("📌 Grade 11", callback_data="grade_11"), InlineKeyboardButton("📌 Grade 12", callback_data="grade_12")],
+        [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
+    ]
+    await edit_or_send(update, STRINGS[lang]['select_grade'], InlineKeyboardMarkup(keyboard))
+
+
+# ==========================================
+# 6. CALLBACK ROUTER
+# ==========================================
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    # --- Language Selection ---
+    # --- Language Switch ---
     if data.startswith("lang_"):
-        lang = data.split("_")[1]
-        context.user_data['lang'] = lang
+        selected_lang = data.split("_")[1]
+        context.user_data['lang'] = selected_lang
         await show_main_menu(update, context)
         return
 
     lang = context.user_data.get('lang', 'am')
 
-    # --- Main Menu Navigation ---
+    # --- Main Navigation ---
     if data == "main_menu":
         await show_main_menu(update, context)
         return
 
     elif data == "menu_quiz":
-        # Grade Selection
-        keyboard = [
-            [InlineKeyboardButton("📌 Grade 9", callback_data="grade_9"), InlineKeyboardButton("📌 Grade 10", callback_data="grade_10")],
-            [InlineKeyboardButton("📌 Grade 11", callback_data="grade_11"), InlineKeyboardButton("📌 Grade 12", callback_data="grade_12")],
-            [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
-        ]
-        await edit_or_send(update, STRINGS[lang]['select_grade'], InlineKeyboardMarkup(keyboard))
+        await cmd_quiz(update, context)
+        return
 
+    # --- Grade Selection ---
     elif data.startswith("grade_"):
         grade = data.split("_")[1]
         context.user_data['selected_grade'] = grade
 
         if grade in ["9", "10"]:
-            # Subjects for Grade 9 & 10
             subjects = [
                 ("English", "sub_eng"), ("Maths", "sub_math"), ("Economics", "sub_eco"),
                 ("Geography", "sub_geo"), ("Physics", "sub_phy"), ("Biology", "sub_bio"),
@@ -237,7 +253,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_or_send(update, STRINGS[lang]['select_subject'], InlineKeyboardMarkup(keyboard))
 
         elif grade in ["11", "12"]:
-            # Stream Selection
             keyboard = [
                 [InlineKeyboardButton("🔬 Natural Science", callback_data="stream_nat")],
                 [InlineKeyboardButton("📖 Social Science", callback_data="stream_soc")],
@@ -245,6 +260,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await edit_or_send(update, STRINGS[lang]['select_stream'], InlineKeyboardMarkup(keyboard))
 
+    # --- Stream Selection ---
     elif data.startswith("stream_"):
         stream = data.split("_")[1]
         context.user_data['selected_stream'] = stream
@@ -266,11 +282,10 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"grade_{context.user_data.get('selected_grade')}")])
         await edit_or_send(update, STRINGS[lang]['select_subject'], InlineKeyboardMarkup(keyboard))
 
+    # --- Subject Selection ---
     elif data.startswith("sub_"):
         context.user_data['selected_sub'] = data
-        # Unit Selection
         if data == "sub_math" and context.user_data.get('selected_grade') == "11" and context.user_data.get('selected_stream') == "nat":
-            # Only Unit 1 is available for testing
             keyboard = [
                 [InlineKeyboardButton("📖 Unit 1: Sequences & Series", callback_data="unit_1")],
                 [InlineKeyboardButton("📖 Unit 2 (Not Released)", callback_data="unit_empty")],
@@ -286,7 +301,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_or_send(update, STRINGS[lang]['no_questions'], InlineKeyboardMarkup(keyboard))
 
     elif data == "unit_1":
-        # Question Count Selection
         keyboard = [
             [InlineKeyboardButton("5 Questions", callback_data="qcount_5")],
             [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
@@ -294,13 +308,11 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_or_send(update, STRINGS[lang]['select_q_count'], InlineKeyboardMarkup(keyboard))
 
     elif data == "qcount_5":
-        # Start Quiz Initialization
         context.user_data['quiz_index'] = 0
         context.user_data['answers'] = {}
         await render_question(update, context)
 
     elif data.startswith("ans_"):
-        # Save Answer and Go to Next Question
         parts = data.split("_")
         q_idx = int(parts[1])
         ans_idx = int(parts[2])
@@ -319,12 +331,10 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Render Question Screen """
     lang = context.user_data.get('lang', 'am')
     idx = context.user_data.get('quiz_index', 0)
     answers = context.user_data.get('answers', {})
 
-    # If all questions finished
     if idx >= len(SAMPLE_QUESTIONS):
         await render_summary(update, context)
         return
@@ -335,11 +345,9 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = []
     for opt_idx, opt in enumerate(options):
-        # Indicate selected option
         prefix = "✅ " if answers.get(idx) == opt_idx else ""
         keyboard.append([InlineKeyboardButton(f"{prefix}{opt}", callback_data=f"ans_{idx}_{opt_idx}")])
 
-    # Navigation Buttons
     nav_row = []
     if idx > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"nav_{idx-1}"))
@@ -356,7 +364,6 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def render_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ Render Quiz Summary & Review """
     lang = context.user_data.get('lang', 'am')
     answers = context.user_data.get('answers', {})
 
@@ -391,13 +398,11 @@ async def render_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==========================================
-# 6. MAIN APPLICATION ENTRY POINT
+# 7. MAIN ENTRY POINT
 # ==========================================
 def main():
-    # Start Keep-Alive Web Server on Background Thread
     threading.Thread(target=run_web_server, daemon=True).start()
 
-    # Retrieve Bot Token from Environment Variable
     token = os.environ.get("BOT_TOKEN")
     if not token:
         print("Error: BOT_TOKEN environment variable not set.")
@@ -405,10 +410,13 @@ def main():
 
     app = ApplicationBuilder().token(token).build()
 
-    app.add_handler(CommandHandler("start", start))
+    # Commands Registered Correctly
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("lang", cmd_lang))
+    app.add_handler(CommandHandler("quiz", cmd_quiz))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
 
-    print("FAF Quiz Bot started...")
+    print("FAF Quiz Bot is running...")
     app.run_polling()
 
 
