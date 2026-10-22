@@ -1,206 +1,416 @@
 import os
-import asyncio
-import aiohttp
-import html
-from datetime import datetime
-from aiohttp import web
-
-from aiogram import Bot, Dispatcher, F, types, BaseMiddleware
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject
-
-# Environment Variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL", "").rstrip('/')
-SUPER_ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "")
-
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN አልተገኘም!")
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+import threading
+from flask import Flask
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 # ==========================================
-# 🗄 FIREBASE HELPER FUNCTIONS
+# 1. RENDER KEEP-ALIVE SERVER (Flask)
 # ==========================================
-async def fb_get(path: str):
-    if not FIREBASE_DB_URL:
-        return None
-    url = f"{FIREBASE_DB_URL}/{path}.json"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                return await resp.json()
-    return None
+web_app = Flask(__name__)
 
-async def fb_put(path: str, data):
-    if not FIREBASE_DB_URL:
-        return
-    url = f"{FIREBASE_DB_URL}/{path}.json"
-    async with aiohttp.ClientSession() as session:
-        await session.put(url, json=data)
 
-async def fb_post(path: str, data):
-    if not FIREBASE_DB_URL:
-        return None
-    url = f"{FIREBASE_DB_URL}/{path}.json"
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=data) as resp:
-            if resp.status == 200:
-                res = await resp.json()
-                return res.get("name")
-    return None
+@web_app.route('/')
+def health_check():
+    return "FAF Quiz Bot is running successfully!", 200
 
-async def save_user(user_id: int, username: str, first_name: str, lang: str = "am"):
-    user_data = {
-        "username": username or "",
-        "first_name": first_name or "",
-        "language": lang
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+
+# ==========================================
+# 2. LOCALIZATION / LANGUAGES DATA
+# ==========================================
+STRINGS = {
+    'am': {
+        'select_lang': "እባክዎ ቋንቋ ይምረጡ / Please select your language:",
+        'welcome': "እንኳን ደህና መጣህ {}! ወደ FAF Quiz እንኳን በደህና መጣህ።",
+        'btn_quiz': "📚 ኩዊዝ (Quiz)",
+        'btn_result': "📊 ውጤት (Result)",
+        'btn_support': "💬 ድጋፍ (Support)",
+        'btn_about': "ℹ️ ስለ እኛ (About Us)",
+        'btn_main_menu': "🏠 ዋና ማኑ (Main Menu)",
+        'btn_back': "⬅️ ተመለስ (Back)",
+        'btn_try_again': "🔄 እንደገና ሞክር (Try Again)",
+        'select_grade': "እባክዎ ክፍልዎን ይምረጡ፡",
+        'select_stream': "እባክዎ ዘርፍዎን (Stream) ይምረጡ፡",
+        'select_subject': "እባክዎ የትምህርት ዓይነት ይምረጡ፡",
+        'select_unit': "እባክዎ ዩኒት ይምረጡ፡",
+        'no_questions': "ለጊዜው በዚህ ዩኒት ምንም ጥያቄ አልተለቀቀም።",
+        'select_q_count': "ስንት ጥያቄ መስራት ይፈልጋሉ?",
+        'quiz_finished': "🎉 ኩዊዙን አጠናቀሃል!\n\n📊 **ውጤት:** ከ {} ጥያቄዎች {} አግኝተሃል ({}%)\n\n{}",
+        'review_title': "📝 **የጥያቄዎች ማብራሪያ (Review):**\n",
+        'good_job': "👏 በጣም አሪፍ ስራ ነው! በርታ!",
+        'keep_trying': "💪 ጥሩ ሙከራ ነው! ደግመህ በመስራት ውጤትህን አሻሽል።",
+    },
+    'en': {
+        'select_lang': "Please select your language / እባክዎ ቋንቋ ይምረጡ:",
+        'welcome': "Welcome {}! Welcome to FAF Quiz.",
+        'btn_quiz': "📚 Quiz",
+        'btn_result': "📊 Result",
+        'btn_support': "💬 Support",
+        'btn_about': "ℹ️ About Us",
+        'btn_main_menu': "🏠 Main Menu",
+        'btn_back': "⬅️ Back",
+        'btn_try_again': "🔄 Try Again",
+        'select_grade': "Please select your grade:",
+        'select_stream': "Please select your stream:",
+        'select_subject': "Please select a subject:",
+        'select_unit': "Please select a unit:",
+        'no_questions': "No questions have been released for this unit yet.",
+        'select_q_count': "How many questions would you like to take?",
+        'quiz_finished': "🎉 Quiz Completed!\n\n📊 **Score:** You got {} out of {} ({}%)\n\n{}",
+        'review_title': "📝 **Questions Review:**\n",
+        'good_job': "👏 Great job! Keep it up!",
+        'keep_trying': "💪 Good effort! Try again to improve your score.",
     }
-    await fb_put(f"users/{user_id}", user_data)
-
-async def get_user_language(user_id: int) -> str:
-    user = await fb_get(f"users/{user_id}")
-    if user and isinstance(user, dict):
-        return user.get("language", "am")
-    return "am"
+}
 
 # ==========================================
-# 📝 FSM STATES
+# 3. SAMPLE DATA (GRADE 11 MATHS UNIT 1)
 # ==========================================
-class UserState(StatesGroup):
-    waiting_for_language = State()
+SAMPLE_QUESTIONS = [
+    {
+        "id": 1,
+        "question_am": "1. Sequence እና Series ልዩነታቸው ምንድነው?",
+        "question_en": "1. What is the main difference between a Sequence and a Series?",
+        "options_am": [
+            "A) Sequence ድምር ነው፣ Series ተከታታይ ቁጥር ነው",
+            "B) Sequence ተከታታይ ቁጥር ነው፣ Series ደግሞ የቁጥሮቹ ድምር ነው",
+            "C) ሁለቱም አንድ ናቸው",
+            "D) ምንም ልዩነት የላቸውም"
+        ],
+        "options_en": [
+            "A) Sequence is a sum, Series is an ordered list",
+            "B) Sequence is an ordered list, Series is the sum of terms",
+            "C) Both are identical",
+            "D) None of the above"
+        ],
+        "correct": 1, # Index B
+        "exp_am": "Sequence ማለት የተከታተሉ ቁጥሮች ዝርዝር ሲሆን Series ደግሞ የእነዚያ ቁጥሮች ድምር ነው።",
+        "exp_en": "A sequence is an ordered list of numbers, whereas a series is the sum of the terms of a sequence."
+    },
+    {
+        "id": 2,
+        "question_am": "2. በአርቲስሜቲክ ሲክዌንስ (Arithmetic Sequence) ውስጥ የጋራ ልዩነት (Common Difference) ምልክት ምንድነው?",
+        "question_en": "2. What symbol represents the common difference in an Arithmetic Sequence?",
+        "options_am": ["A) r", "B) d", "C) S_n", "D) a_n"],
+        "options_en": ["A) r", "B) d", "C) S_n", "D) a_n"],
+        "correct": 1, # Index B
+        "exp_am": "በ Arithmetic Sequence ውስጥ የጋራ ልዩነት በ 'd' ይወከላል።",
+        "exp_en": "In an Arithmetic Sequence, the common difference is represented by 'd'."
+    },
+    {
+        "id": 3,
+        "question_am": "3. የ 2, 4, 6, 8, ... የ 10ኛው ተርም (a_10) ዋጋ ስንት ነው?",
+        "question_en": "3. What is the 10th term (a_10) of the sequence 2, 4, 6, 8, ...?",
+        "options_am": ["A) 18", "B) 20", "C) 22", "D) 24"],
+        "options_en": ["A) 18", "B) 20", "C) 22", "D) 24"],
+        "correct": 1, # Index B
+        "exp_am": "a_n = a_1 + (n-1)d -> a_10 = 2 + (9)(2) = 20።",
+        "exp_en": "a_n = a_1 + (n-1)d -> a_10 = 2 + (9)(2) = 20."
+    },
+    {
+        "id": 4,
+        "question_am": "4. ጂኦሜትሪክ ሲክዌንስ (Geometric Sequence) በምን ይታወቃል?",
+        "question_en": "4. What defines a Geometric Sequence?",
+        "options_am": [
+            "A) የጋራ ድምር በማኖር",
+            "C) የጋራ ብዜት/ሬሺዮ (Common Ratio 'r') በማኖር",
+            "B) የጋራ ልዩነት በማኖር",
+            "D) በምንም"
+        ],
+        "options_en": [
+            "A) Having a common difference",
+            "B) Having a common ratio 'r'",
+            "C) Having a common sum",
+            "D) None"
+        ],
+        "correct": 1, # Index B
+        "exp_am": "Geometric Sequence ተከታታይ ውሎች በጋራ ብዜት (r) እየተባዙ ይሄዳሉ።",
+        "exp_en": "A Geometric Sequence is formed by multiplying the previous term by a common ratio 'r'."
+    },
+    {
+        "id": 5,
+        "question_am": "5. የ 1 + 2 + 3 + ... + 10 ድምር (Sum) ስንት ነው?",
+        "question_en": "5. What is the sum of 1 + 2 + 3 + ... + 10?",
+        "options_am": ["A) 45", "B) 50", "C) 55", "D) 60"],
+        "options_en": ["A) 45", "B) 50", "C) 55", "D) 60"],
+        "correct": 2, # Index C
+        "exp_am": "S_n = n(n+1)/2 -> S_10 = 10(11)/2 = 55።",
+        "exp_en": "S_n = n(n+1)/2 -> S_10 = 10(11)/2 = 55."
+    }
+]
 
 # ==========================================
-# 🌐 LANGUAGE KEYBOARDS & UI HELPERS
+# 4. BOT HELPER FUNCTIONS
 # ==========================================
-def get_language_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🇪🇹 አማርኛ", callback_data="lang_am"),
-            InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")
+async def edit_or_send(update: Update, text: str, reply_markup=None):
+    """ Helper to keep chat clean by editing existing message """
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+# ==========================================
+# 5. HANDLERS
+# ==========================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Handle /start command """
+    keyboard = [
+        [InlineKeyboardButton("🇪🇹 አማርኛ", callback_data="lang_am")],
+        [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = f"{STRINGS['am']['select_lang']}\n\n{STRINGS['en']['select_lang']}"
+    await edit_or_send(update, text, reply_markup)
+
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Main Menu Screen """
+    lang = context.user_data.get('lang', 'am')
+    user_name = update.effective_user.first_name
+
+    welcome_txt = STRINGS[lang]['welcome'].format(user_name)
+    keyboard = [
+        [InlineKeyboardButton(STRINGS[lang]['btn_quiz'], callback_data="menu_quiz")],
+        [InlineKeyboardButton(STRINGS[lang]['btn_result'], callback_data="menu_result")],
+        [InlineKeyboardButton(STRINGS[lang]['btn_support'], callback_data="menu_support")],
+        [InlineKeyboardButton(STRINGS[lang]['btn_about'], callback_data="menu_about")]
+    ]
+    await edit_or_send(update, welcome_txt, InlineKeyboardMarkup(keyboard))
+
+
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    # --- Language Selection ---
+    if data.startswith("lang_"):
+        lang = data.split("_")[1]
+        context.user_data['lang'] = lang
+        await show_main_menu(update, context)
+        return
+
+    lang = context.user_data.get('lang', 'am')
+
+    # --- Main Menu Navigation ---
+    if data == "main_menu":
+        await show_main_menu(update, context)
+        return
+
+    elif data == "menu_quiz":
+        # Grade Selection
+        keyboard = [
+            [InlineKeyboardButton("📌 Grade 9", callback_data="grade_9"), InlineKeyboardButton("📌 Grade 10", callback_data="grade_10")],
+            [InlineKeyboardButton("📌 Grade 11", callback_data="grade_11"), InlineKeyboardButton("📌 Grade 12", callback_data="grade_12")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
         ]
-    ])
+        await edit_or_send(update, STRINGS[lang]['select_grade'], InlineKeyboardMarkup(keyboard))
 
-def get_main_menu_keyboard(lang: str = "am"):
-    if lang == "en":
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Take Quiz", callback_data="quiz_menu")],
-            [InlineKeyboardButton(text="📊 Student Result", callback_data="result_menu")],
-            [
-                InlineKeyboardButton(text="ℹ️ About Us", callback_data="about_us"),
-                InlineKeyboardButton(text="☎️ Support", callback_data="support")
+    elif data.startswith("grade_"):
+        grade = data.split("_")[1]
+        context.user_data['selected_grade'] = grade
+
+        if grade in ["9", "10"]:
+            # Subjects for Grade 9 & 10
+            subjects = [
+                ("English", "sub_eng"), ("Maths", "sub_math"), ("Economics", "sub_eco"),
+                ("Geography", "sub_geo"), ("Physics", "sub_phy"), ("Biology", "sub_bio"),
+                ("Chemistry", "sub_chem"), ("Citizenship", "sub_cit"), ("History", "sub_his"),
+                ("IT", "sub_it"), ("HPE", "sub_hpe"), ("አማርኛ", "sub_amh"), ("ስልጥኛ", "sub_slt")
             ]
-        ])
-    else:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 ኪዝ ይስሩ (Quiz)", callback_data="quiz_menu")],
-            [InlineKeyboardButton(text="📊 ውጤት ማያ (Result)", callback_data="result_menu")],
-            [
-                InlineKeyboardButton(text="ℹ️ ስለ እኛ (About)", callback_data="about_us"),
-                InlineKeyboardButton(text="☎️ ድጋፍ (Support)", callback_data="support")
+            keyboard = [[InlineKeyboardButton(name, callback_data=code)] for name, code in subjects]
+            keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="menu_quiz")])
+            await edit_or_send(update, STRINGS[lang]['select_subject'], InlineKeyboardMarkup(keyboard))
+
+        elif grade in ["11", "12"]:
+            # Stream Selection
+            keyboard = [
+                [InlineKeyboardButton("🔬 Natural Science", callback_data="stream_nat")],
+                [InlineKeyboardButton("📖 Social Science", callback_data="stream_soc")],
+                [InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="menu_quiz")]
             ]
-        ])
+            await edit_or_send(update, STRINGS[lang]['select_stream'], InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("stream_"):
+        stream = data.split("_")[1]
+        context.user_data['selected_stream'] = stream
+
+        if stream == "nat":
+            subjects = [
+                ("Maths", "sub_math"), ("English", "sub_eng"), ("Physics", "sub_phy"),
+                ("Biology", "sub_bio"), ("Chemistry", "sub_chem"), ("IT", "sub_it"),
+                ("Agriculture", "sub_agri"), ("Construction", "sub_const")
+            ]
+        else:
+            subjects = [
+                ("Maths", "sub_math"), ("English", "sub_eng"), ("Economics", "sub_eco"),
+                ("Geography", "sub_geo"), ("History", "sub_his"), ("Journalism", "sub_jour"),
+                ("Citizenship", "sub_cit")
+            ]
+
+        keyboard = [[InlineKeyboardButton(name, callback_data=code)] for name, code in subjects]
+        keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"grade_{context.user_data.get('selected_grade')}")])
+        await edit_or_send(update, STRINGS[lang]['select_subject'], InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("sub_"):
+        context.user_data['selected_sub'] = data
+        # Unit Selection
+        if data == "sub_math" and context.user_data.get('selected_grade') == "11" and context.user_data.get('selected_stream') == "nat":
+            # Only Unit 1 is available for testing
+            keyboard = [
+                [InlineKeyboardButton("📖 Unit 1: Sequences & Series", callback_data="unit_1")],
+                [InlineKeyboardButton("📖 Unit 2 (Not Released)", callback_data="unit_empty")],
+                [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
+            ]
+            await edit_or_send(update, STRINGS[lang]['select_unit'], InlineKeyboardMarkup(keyboard))
+        else:
+            keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="menu_quiz")]]
+            await edit_or_send(update, STRINGS[lang]['no_questions'], InlineKeyboardMarkup(keyboard))
+
+    elif data == "unit_empty":
+        keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="sub_math")]]
+        await edit_or_send(update, STRINGS[lang]['no_questions'], InlineKeyboardMarkup(keyboard))
+
+    elif data == "unit_1":
+        # Question Count Selection
+        keyboard = [
+            [InlineKeyboardButton("5 Questions", callback_data="qcount_5")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
+        ]
+        await edit_or_send(update, STRINGS[lang]['select_q_count'], InlineKeyboardMarkup(keyboard))
+
+    elif data == "qcount_5":
+        # Start Quiz Initialization
+        context.user_data['quiz_index'] = 0
+        context.user_data['answers'] = {}
+        await render_question(update, context)
+
+    elif data.startswith("ans_"):
+        # Save Answer and Go to Next Question
+        parts = data.split("_")
+        q_idx = int(parts[1])
+        ans_idx = int(parts[2])
+
+        answers = context.user_data.get('answers', {})
+        answers[q_idx] = ans_idx
+        context.user_data['answers'] = answers
+
+        context.user_data['quiz_index'] = q_idx + 1
+        await render_question(update, context)
+
+    elif data.startswith("nav_"):
+        target_idx = int(data.split("_")[1])
+        context.user_data['quiz_index'] = target_idx
+        await render_question(update, context)
+
+
+async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Render Question Screen """
+    lang = context.user_data.get('lang', 'am')
+    idx = context.user_data.get('quiz_index', 0)
+    answers = context.user_data.get('answers', {})
+
+    # If all questions finished
+    if idx >= len(SAMPLE_QUESTIONS):
+        await render_summary(update, context)
+        return
+
+    q_data = SAMPLE_QUESTIONS[idx]
+    q_text = q_data['question_am'] if lang == 'am' else q_data['question_en']
+    options = q_data['options_am'] if lang == 'am' else q_data['options_en']
+
+    keyboard = []
+    for opt_idx, opt in enumerate(options):
+        # Indicate selected option
+        prefix = "✅ " if answers.get(idx) == opt_idx else ""
+        keyboard.append([InlineKeyboardButton(f"{prefix}{opt}", callback_data=f"ans_{idx}_{opt_idx}")])
+
+    # Navigation Buttons
+    nav_row = []
+    if idx > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"nav_{idx-1}"))
+    if idx in answers:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"nav_{idx+1}"))
+
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")])
+
+    progress = f"📍 ({idx + 1}/{len(SAMPLE_QUESTIONS)})\n\n"
+    await edit_or_send(update, progress + q_text, InlineKeyboardMarkup(keyboard))
+
+
+async def render_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Render Quiz Summary & Review """
+    lang = context.user_data.get('lang', 'am')
+    answers = context.user_data.get('answers', {})
+
+    correct_count = 0
+    total = len(SAMPLE_QUESTIONS)
+    review_text = STRINGS[lang]['review_title']
+
+    for idx, q_data in enumerate(SAMPLE_QUESTIONS):
+        user_ans = answers.get(idx)
+        correct_ans = q_data['correct']
+
+        q_txt = q_data['question_am'] if lang == 'am' else q_data['question_en']
+        exp_txt = q_data['exp_am'] if lang == 'am' else q_data['exp_en']
+
+        if user_ans == correct_ans:
+            correct_count += 1
+            review_text += f"\n✅ **{q_txt}**\n💡 {exp_txt}\n"
+        else:
+            options = q_data['options_am'] if lang == 'am' else q_data['options_en']
+            correct_option_txt = options[correct_ans]
+            review_text += f"\n❌ **{q_txt}**\n👉 Correct: {correct_option_txt}\n💡 {exp_txt}\n"
+
+    percent = int((correct_count / total) * 100)
+    feedback = STRINGS[lang]['good_job'] if percent >= 75 else STRINGS[lang]['keep_trying']
+    final_msg = STRINGS[lang]['quiz_finished'].format(total, correct_count, percent, feedback) + "\n" + review_text
+
+    keyboard = [
+        [InlineKeyboardButton(STRINGS[lang]['btn_try_again'], callback_data="qcount_5")],
+        [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
+    ]
+    await edit_or_send(update, final_msg, InlineKeyboardMarkup(keyboard))
+
 
 # ==========================================
-# 🚀 COMMAND HANDLERS
+# 6. MAIN APPLICATION ENTRY POINT
 # ==========================================
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    welcome_text = (
-        f"👋 Welcome <b>{html.escape(message.from_user.first_name)}</b>!\n"
-        "እንኳን ወደ ትምህርታዊ ቦት በደህና መጡ! 🇪🇹\n\n"
-        "Please select your language | እባክዎ ቋንቋ ይምረጡ፦"
-    )
-    await state.set_state(UserState.waiting_for_language)
-    await message.answer(welcome_text, reply_markup=get_language_keyboard(), parse_mode="HTML")
+def main():
+    # Start Keep-Alive Web Server on Background Thread
+    threading.Thread(target=run_web_server, daemon=True).start()
 
-@dp.callback_query(UserState.waiting_for_language, F.data.startswith("lang_"))
-async def process_language_selection(callback: types.CallbackQuery, state: FSMContext):
-    selected_lang = "am" if callback.data == "lang_am" else "en"
-    user = callback.from_user
-    
-    await save_user(user.id, user.username, user.first_name, selected_lang)
-    await state.clear()
-    
-    if selected_lang == "en":
-        text = (
-            f"👋 Hello <b>{html.escape(user.first_name)}</b>!\n\n"
-            "Welcome to the Educational High School Bot.\n"
-            "Choose an option below to get started:"
-        )
-    else:
-        text = (
-            f"👋 ሰላም <b>{html.escape(user.first_name)}</b>!\n\n"
-            "እንኳን ወደ ሁለተኛ ደረጃ ትምህርት ቤት ቦት በደህና መጡ።\n"
-            "ለመጀመር ከታች ካሉት አማራጮች አንዱን ይምረጡ፦"
-        )
-        
-    await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(selected_lang), parse_mode="HTML")
-    await callback.answer()
+    # Retrieve Bot Token from Environment Variable
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        print("Error: BOT_TOKEN environment variable not set.")
+        return
 
-@dp.callback_query(F.data == "main_menu")
-async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    lang = await get_user_language(callback.from_user.id)
-    
-    if lang == "en":
-        text = "🏠 <b>Main Menu</b>\n\nChoose an option below:"
-    else:
-        text = "🏠 <b>ዋና ማውጫ (Main Menu)</b>\n\nከታች ካሉት አማራጮች ይምረጡ፦"
-        
-    await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(lang), parse_mode="HTML")
-    await callback.answer()
+    app = ApplicationBuilder().token(token).build()
 
-# Placeholder Callbacks for upcoming modules
-@dp.callback_query(F.data == "about_us")
-async def show_about_us(callback: types.CallbackQuery):
-    lang = await get_user_language(callback.from_user.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu" if lang == "en" else "🏠 ዋና ማውጫ", callback_data="main_menu")]])
-    
-    if lang == "en":
-        text = "ℹ️ <b>About Us</b>\n\nThis educational Telegram bot helps Ethiopian high school students practice quizzes and view their examination results efficiently."
-    else:
-        text = "ℹ️ <b>ስለ እኛ</b>\n\nይህ የትምህርት ቦት የኢትዮጵያ ሁለተኛ ደረጃ ተማሪዎች የትምህርት ጥያቄዎችን እንዲለማመዱ እና የፈተና ውጤታቸውን በቀላሉ እንዲያዩ የተዘጋጀ ነው።"
-        
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callbacks))
 
-@dp.callback_query(F.data == "support")
-async def show_support(callback: types.CallbackQuery):
-    lang = await get_user_language(callback.from_user.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu" if lang == "en" else "🏠 ዋና ማውጫ", callback_data="main_menu")]])
-    
-    if lang == "en":
-        text = "☎️ <b>Support</b>\n\nIf you have any questions or issues, please contact your school administrator or teacher."
-    else:
-        text = "☎️ <b>ድጋፍ</b>\n\nማንኛውም ጥያቄ ወይም አስተያየት ካለዎት እባክዎ የትምህርት ቤቱን አድሚን ወይም መምህሩን ያናግሩ።"
-        
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    print("FAF Quiz Bot started...")
+    app.run_polling()
 
-# ==========================================
-# 🔄 WEB SERVER FOR 24/7 HOSTING
-# ==========================================
-async def handle_ping(request):
-    return web.Response(text="Edu Bot is awake & running 24/7!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-async def main():
-    print("ትምህርታዊ ቦቱ ስራ ጀምሯል...")
-    await asyncio.gather(start_web_server(), dp.start_polling(bot))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
