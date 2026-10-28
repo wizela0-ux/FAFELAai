@@ -6,7 +6,9 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 
 # ==========================================
@@ -44,11 +46,19 @@ STRINGS = {
         'select_subject': "እባክዎ የትምህርት ዓይነት ይምረጡ፡",
         'select_unit': "እባክዎ ዩኒት ይምረጡ፡",
         'no_questions': "እዚህ ሰብጀክት ላይ ምንም አይነት የዩኒት ጥያቄ አልተለቀቀም።",
-        'available_q': "📌 የሚገኙ ጥያቄዎች ብዛት: {}\n\nእባክዎ የሚፈልጉትን የጥያቄ ብዛት ይምረጡ:",
+        'available_q': "📌 የሚገኙ ጥያቄዎች ጠቅላላ ብዛት: {}\n\nእባክዎ የሚፈልጉትን የጥያቄ ብዛት ይምረጡ:",
+        'custom_prompt': "✍️ እባክዎ የሚፈልጉትን የጥያቄ ብዛት በቁጥር ያስገቡ (ከ 1 እስከ {}):",
+        'invalid_count': "⚠️ ስህተት! ያስገቡት ቁጥር ከሚገኙት ጥያቄዎች ብዛት ({} ክልል) መብለጥ የለበትም። እባክዎ እንደገና ይሞክሩ:",
         'quiz_finished': "🎉 ኩዊዙን አጠናቀሃል!\n\n📊 **ውጤት:** ከ {} ጥያቄዎች {} አግኝተሃል ({}%)\n\n{}",
         'review_title': "📝 **የጥያቄዎች ማብራሪያ (Review):**\n",
         'good_job': "👏 በጣም አሪፍ ስራ ነው! በርታ!",
         'keep_trying': "💪 ጥሩ ሙከራ ነው! ደግመህ በመስራት ውጤትህን አሻሽል።",
+        'quit_confirm': "⚠️ ኩይዝ እየሰሩ ነው! ማቋረጥ ወይም ሚኒማይዝ ማድረግ ይፈልጋሉ?",
+        'btn_minimize': "🟡 ሚኒማይዝ (Minimize)",
+        'btn_cancel': "❌ ሙሉ በሙሉ አቋርጥ (Cancel)",
+        'resume_quiz': "🔄 ያልጨረሱት ኩይዝ አለ! መቀጠል ይፈልጋሉ?",
+        'btn_resume': "▶️ ቀጥል (Resume)",
+        'btn_restart_quiz': "🔄 አዲስ ጀምር (Restart)",
     },
     'en': {
         'select_lang': "Please select your language / እባክዎ ቋንቋ ይምረጡ:",
@@ -65,11 +75,19 @@ STRINGS = {
         'select_subject': "Please select a subject:",
         'select_unit': "Please select a unit:",
         'no_questions': "እዚህ ሰብጀክት ላይ ምንም አይነት የዩኒት ጥያቄ አልተለቀቀም።",
-        'available_q': "📌 Available questions: {}\n\nPlease select the number of questions:",
+        'available_q': "📌 Total available questions: {}\n\nPlease select the number of questions:",
+        'custom_prompt': "✍️ Please enter the number of questions you want (1 to {}):",
+        'invalid_count': "⚠️ Error! Entered number cannot exceed total available questions ({}). Please try again:",
         'quiz_finished': "🎉 Quiz Completed!\n\n📊 **Score:** You got {} out of {} ({}%)\n\n{}",
         'review_title': "📝 **Questions Review:**\n",
         'good_job': "👏 Great job! Keep it up!",
         'keep_trying': "💪 Good effort! Try again to improve your score.",
+        'quit_confirm': "⚠️ You have an active quiz! Do you want to quit or minimize?",
+        'btn_minimize': "🟡 Minimize",
+        'btn_cancel': "❌ Cancel Quiz",
+        'resume_quiz': "🔄 You have an unfinished quiz! Do you want to resume?",
+        'btn_resume': "▶️ Resume",
+        'btn_restart_quiz': "🔄 Start New",
     }
 }
 
@@ -160,20 +178,43 @@ async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data.get('lang', 'am')
-    user_name = update.effective_user.first_name
+    user_name = update.effective_user.first_name if update.effective_user else "User"
 
-    welcome_txt = STRINGS[lang]['welcome'].format(user_name)
-    keyboard = [
-        [InlineKeyboardButton(STRINGS[lang]['btn_quiz'], callback_data="menu_quiz")],
-        [InlineKeyboardButton(STRINGS[lang]['btn_result'], callback_data="menu_result")],
-        [InlineKeyboardButton(STRINGS[lang]['btn_support'], callback_data="menu_support")],
-        [InlineKeyboardButton(STRINGS[lang]['btn_about'], callback_data="menu_about")]
-    ]
+    # Check if there is an active/minimized quiz in progress
+    if context.user_data.get('quiz_in_progress'):
+        keyboard = [
+            [InlineKeyboardButton(STRINGS[lang]['btn_resume'], callback_data="resume_quiz")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_restart_quiz'], callback_data="restart_quiz")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_result'], callback_data="menu_result")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_support'], callback_data="menu_support")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_about'], callback_data="menu_about")]
+        ]
+        welcome_txt = f"{STRINGS[lang]['resume_quiz']}\n\n{STRINGS[lang]['welcome'].format(user_name)}"
+    else:
+        welcome_txt = STRINGS[lang]['welcome'].format(user_name)
+        keyboard = [
+            [InlineKeyboardButton(STRINGS[lang]['btn_quiz'], callback_data="menu_quiz")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_result'], callback_data="menu_result")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_support'], callback_data="menu_support")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_about'], callback_data="menu_about")]
+        ]
     await edit_or_send(update, welcome_txt, InlineKeyboardMarkup(keyboard))
 
 
 async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data.get('lang', 'am')
+    
+    # If a quiz is already in progress, ask for confirmation / resume option
+    if context.user_data.get('quiz_in_progress') and not context.user_data.get('bypassed_active_check'):
+        keyboard = [
+            [InlineKeyboardButton(STRINGS[lang]['btn_resume'], callback_data="resume_quiz")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_try_again'], callback_data="restart_quiz")],
+            [InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="main_menu")]
+        ]
+        await edit_or_send(update, STRINGS[lang]['resume_quiz'], InlineKeyboardMarkup(keyboard))
+        return
+
+    context.user_data['bypassed_active_check'] = False
     keyboard = [
         [InlineKeyboardButton("📌 Grade 9", callback_data="grade_9"), InlineKeyboardButton("📌 Grade 10", callback_data="grade_10")],
         [InlineKeyboardButton("📌 Grade 11", callback_data="grade_11"), InlineKeyboardButton("📌 Grade 12", callback_data="grade_12")],
@@ -189,6 +230,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
+    # Language selection
     if data.startswith("lang_"):
         selected_lang = data.split("_")[1]
         context.user_data['lang'] = selected_lang
@@ -197,8 +239,42 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lang = context.user_data.get('lang', 'am')
 
+    # Main menu or Quit confirmation checks
     if data == "main_menu":
+        if context.user_data.get('quiz_in_progress'):
+            # Show Minimize / Cancel confirmation
+            keyboard = [
+                [InlineKeyboardButton(STRINGS[lang]['btn_minimize'], callback_data="quiz_min")],
+                [InlineKeyboardButton(STRINGS[lang]['btn_cancel'], callback_data="quiz_cancel")]
+            ]
+            await edit_or_send(update, STRINGS[lang]['quit_confirm'], InlineKeyboardMarkup(keyboard))
+            return
         await show_main_menu(update, context)
+        return
+
+    elif data == "quiz_min":
+        # Minimize quiz and go to main menu
+        await show_main_menu(update, context)
+        return
+
+    elif data == "quiz_cancel":
+        # Cancel quiz completely
+        context.user_data.pop('quiz_in_progress', None)
+        context.user_data.pop('answers', None)
+        context.user_data.pop('quiz_index', None)
+        await show_main_menu(update, context)
+        return
+
+    elif data == "resume_quiz":
+        context.user_data['bypassed_active_check'] = True
+        await render_question(update, context)
+        return
+
+    elif data == "restart_quiz":
+        context.user_data.pop('quiz_in_progress', None)
+        context.user_data.pop('answers', None)
+        context.user_data.pop('quiz_index', None)
+        await cmd_quiz(update, context)
         return
 
     elif data == "menu_quiz":
@@ -255,12 +331,13 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [InlineKeyboardButton("📖 Unit 1: Sequences & Series", callback_data="unit_1")],
                 [InlineKeyboardButton("📖 Unit 2 (Not Released)", callback_data="unit_empty")],
+                [InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"stream_{context.user_data.get('selected_stream')}")],
                 [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
             ]
             await edit_or_send(update, STRINGS[lang]['select_unit'], InlineKeyboardMarkup(keyboard))
         else:
-            # Unreleased subject notification as requested
-            keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="menu_quiz")]]
+            # Unreleased subject notification
+            keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"stream_{context.user_data.get('selected_stream')}")]]
             await edit_or_send(update, STRINGS[lang]['no_questions'], InlineKeyboardMarkup(keyboard))
 
     elif data == "unit_empty":
@@ -270,18 +347,47 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "unit_1":
         available_total = len(SAMPLE_QUESTIONS)
         context.user_data['available_total'] = available_total
-        keyboard = [
-            [InlineKeyboardButton(f"5 Questions (Available: {available_total})", callback_data="qcount_5")],
-            [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
-        ]
+        
+        keyboard = []
+        # Dynamic button generation based on available question count
+        if available_total >= 15:
+            keyboard.append([
+                InlineKeyboardButton("5", callback_data="qcount_5"),
+                InlineKeyboardButton("10", callback_data="qcount_10"),
+                InlineKeyboardButton("15", callback_data="qcount_15")
+            ])
+            keyboard.append([InlineKeyboardButton("✍️ Custom", callback_data="qcount_custom")])
+        elif available_total >= 10:
+            keyboard.append([
+                InlineKeyboardButton("5", callback_data="qcount_5"),
+                InlineKeyboardButton("10", callback_data="qcount_10")
+            ])
+            keyboard.append([InlineKeyboardButton("✍️ Custom", callback_data="qcount_custom")])
+        elif available_total > 0:
+            keyboard.append([InlineKeyboardButton(f"{available_total} Questions", callback_data=f"qcount_{available_total}")])
+            keyboard.append([InlineKeyboardButton("✍️ Custom", callback_data="qcount_custom")])
+
+        keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="sub_math")])
+        keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")])
+
         text_msg = STRINGS[lang]['available_q'].format(available_total)
         await edit_or_send(update, text_msg, InlineKeyboardMarkup(keyboard))
 
-    elif data == "qcount_5":
+    elif data.startswith("qcount_") and data != "qcount_custom":
+        count_val = int(data.split("_")[1])
         context.user_data['quiz_index'] = 0
         context.user_data['answers'] = {}
-        context.user_data['q_count'] = min(5, len(SAMPLE_QUESTIONS))
+        context.user_data['q_count'] = min(count_val, len(SAMPLE_QUESTIONS))
+        context.user_data['quiz_in_progress'] = True
+        context.user_data.pop('waiting_for_custom_count', None)
         await render_question(update, context)
+
+    elif data == "qcount_custom":
+        context.user_data['waiting_for_custom_count'] = True
+        available_total = context.user_data.get('available_total', len(SAMPLE_QUESTIONS))
+        prompt_text = STRINGS[lang]['custom_prompt'].format(available_total)
+        keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="unit_1")]]
+        await edit_or_send(update, prompt_text, InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("ans_"):
         parts = data.split("_")
@@ -292,6 +398,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answers[q_idx] = ans_idx
         context.user_data['answers'] = answers
 
+        # Auto-advance to next question immediately upon clicking option
         context.user_data['quiz_index'] = q_idx + 1
         await render_question(update, context)
 
@@ -301,6 +408,35 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await render_question(update, context)
 
 
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ Handles user text input specifically for Custom question count """
+    lang = context.user_data.get('lang', 'am')
+    if not context.user_data.get('waiting_for_custom_count'):
+        return
+
+    text = update.message.text.strip()
+    available_total = context.user_data.get('available_total', len(SAMPLE_QUESTIONS))
+
+    if not text.isdigit():
+        await update.message.reply_text(STRINGS[lang]['invalid_count'].format(available_total), parse_mode="Markdown")
+        return
+
+    count_val = int(text)
+    if count_val <= 0 or count_val > available_total:
+        await update.message.reply_text(STRINGS[lang]['invalid_count'].format(available_total), parse_mode="Markdown")
+        return
+
+    # Valid custom count entered
+    context.user_data.pop('waiting_for_custom_count', None)
+    context.user_data['quiz_index'] = 0
+    context.user_data['answers'] = {}
+    context.user_data['q_count'] = count_val
+    context.user_data['quiz_in_progress'] = True
+
+    # Send first question message
+    await render_question(update, context)
+
+
 async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data.get('lang', 'am')
     idx = context.user_data.get('quiz_index', 0)
@@ -308,6 +444,7 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q_count = context.user_data.get('q_count', len(SAMPLE_QUESTIONS))
 
     if idx >= q_count or idx >= len(SAMPLE_QUESTIONS):
+        context.user_data.pop('quiz_in_progress', None)
         await render_summary(update, context)
         return
 
@@ -320,7 +457,7 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for opt in options:
         msg_body += f"{opt}\n"
 
-    # Inline keyboard contains only clean choice buttons [ A ] [ B ] [ C ] [ D ]
+    # Inline keyboard contains choice buttons [ ✅/A ] [ B ] [ C ] [ D ]
     keyboard = []
     opt_row = []
     for opt_idx, opt in enumerate(options):
@@ -330,11 +467,10 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard.append(opt_row)
 
+    # Navigation (Only Previous if idx > 0. No Next button as per auto-advance logic)
     nav_row = []
     if idx > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"nav_{idx-1}"))
-    if idx in answers:
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"nav_{idx+1}"))
 
     if nav_row:
         keyboard.append(nav_row)
@@ -374,7 +510,7 @@ async def render_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final_msg = STRINGS[lang]['quiz_finished'].format(total, correct_count, percent, feedback) + "\n" + review_text
 
     keyboard = [
-        [InlineKeyboardButton(STRINGS[lang]['btn_try_again'], callback_data="qcount_5")],
+        [InlineKeyboardButton(STRINGS[lang]['btn_try_again'], callback_data="unit_1")],
         [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
     ]
     await edit_or_send(update, final_msg, InlineKeyboardMarkup(keyboard))
@@ -396,6 +532,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("lang", cmd_lang))
     app.add_handler(CommandHandler("quiz", cmd_quiz))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
 
     print("FAF Quiz Bot is running...")
