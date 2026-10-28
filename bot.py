@@ -34,13 +34,13 @@ STRINGS = {
     'am': {
         'select_lang': "እባክዎ ቋንቋ ይምረጡ / Please select your language:",
         'welcome': "እንኳን ደህና መጣህ {}! ወደ FAF Quiz እንኳን በደህና መጣህ።",
-        'btn_quiz': "📚 ጥያቄዎች",
-        'btn_result': "📊 ውጤት",
-        'btn_support': "💬 ድጋፍ",
-        'btn_about': "ℹ️ ስለ እኛ ",
-        'btn_main_menu': "🏠 ዋና መውጫ",
-        'btn_back': "⬅️ ተመለስ ",
-        'btn_try_again': "🔄 እንደገና ሞክር",
+        'btn_quiz': "📚 ኩዊዝ (Quiz)",
+        'btn_result': "📊 ውጤት (Result)",
+        'btn_support': "💬 ድጋፍ (Support)",
+        'btn_about': "ℹ️ ስለ እኛ (About Us)",
+        'btn_main_menu': "🏠 ዋና ማኑ (Main Menu)",
+        'btn_back': "⬅️ ተመለስ (Back)",
+        'btn_try_again': "🔄 እንደገና ሞክር (Try Again)",
         'select_grade': "እባክዎ ክፍልዎን ይምረጡ፡",
         'select_stream': "እባክዎ ዘርፍዎን ይምረጡ፡",
         'select_subject': "እባክዎ የትምህርት ዓይነት ይምረጡ፡",
@@ -50,15 +50,15 @@ STRINGS = {
         'custom_prompt': "✍️ እባክዎ የሚፈልጉትን የጥያቄ ብዛት በቁጥር ያስገቡ (ከ 1 እስከ {}):",
         'invalid_count': "⚠️ ስህተት! ያስገቡት ቁጥር ከሚገኙት ጥያቄዎች ብዛት ({} ክልል) መብለጥ የለበትም። እባክዎ እንደገና ይሞክሩ:",
         'quiz_finished': "🎉 ኩዊዙን አጠናቀሃል!\n\n📊 **ውጤት:** ከ {} ጥያቄዎች {} አግኝተሃል ({}%)\n\n{}",
-        'review_title': "📝 **የጥያቄዎች ማብራሪያ :**\n",
+        'review_title': "📝 **የጥያቄዎች ማብራሪያ (Review):**\n",
         'good_job': "👏 በጣም አሪፍ ስራ ነው! በርታ!",
         'keep_trying': "💪 ጥሩ ሙከራ ነው! ደግመህ በመስራት ውጤትህን አሻሽል።",
         'quit_confirm': "⚠️ ኩይዝ እየሰሩ ነው! ማቋረጥ ወይም ሚኒማይዝ ማድረግ ይፈልጋሉ?",
-        'btn_minimize': "🟡 ሚኒማይዝ ",
-        'btn_cancel': "❌ ከንስለዉ ",
+        'btn_minimize': "🟡 ሚኒማይዝ (Minimize)",
+        'btn_cancel': "❌ ሙሉ በሙሉ አቋርጥ (Cancel)",
         'resume_quiz': "🔄 ያልጨረሱት ኩይዝ አለ! መቀጠል ይፈልጋሉ?",
-        'btn_resume': "▶️ ቀጥል ",
-        'btn_restart_quiz': "🔄 አዲስ ጀምር ",
+        'btn_resume': "▶️ ቀጥል (Resume)",
+        'btn_restart_quiz': "🔄 አዲስ ጀምር (Restart)",
     },
     'en': {
         'select_lang': "Please select your language / እባክዎ ቋንቋ ይምረጡ:",
@@ -92,7 +92,7 @@ STRINGS = {
 }
 
 # ==========================================
-# 3. SAMPLE DATA (GRADE 11 MATHS UNIT 1 - STRICTLY ENGLISH)
+# 3. SAMPLE DATA (GRADE 11 MATHS UNIT 1 - COMMON G11)Strictly english math
 # ==========================================
 SAMPLE_QUESTIONS = [
     {
@@ -330,8 +330,24 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_or_send(update, STRINGS[lang]['select_subject'], InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("sub_"):
-        context.user_data['selected_sub'] = data
-        if data == "sub_math" and context.user_data.get('selected_grade') == "11" and context.user_data.get('selected_stream') == "nat":
+        sub_code = data
+        current_grade = context.user_data.get('selected_grade')
+        context.user_data['selected_sub'] = sub_code
+
+        # New logic: Check for common subjects in G11/G12
+        is_common_subject = sub_code in ["sub_eng", "sub_math"]
+        is_grade_11_or_12 = current_grade in ["11", "12"]
+
+        if is_grade_11_or_12 and is_common_subject:
+            # Common English/Math selected for G11/G12 -> allow it
+            keyboard = [
+                [InlineKeyboardButton("📖 Unit 1", callback_data="unit_1")],
+                # For common subjects, just add Units. They are same for Nat/Soc
+                [InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"stream_{context.user_data.get('selected_stream')}")],
+                [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
+            ]
+            await edit_or_send(update, STRINGS[lang]['select_unit'], InlineKeyboardMarkup(keyboard))
+        elif sub_code == "sub_math" and current_grade == "11" and context.user_data.get('selected_stream') == "nat":
             keyboard = [
                 [InlineKeyboardButton("📖 Unit 1: Sequences & Series", callback_data="unit_1")],
                 [InlineKeyboardButton("📖 Unit 2 (Not Released)", callback_data="unit_empty")],
@@ -366,7 +382,11 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
             keyboard.append([InlineKeyboardButton("✍️ Custom", callback_data="qcount_custom")])
         elif available_total > 0:
-            keyboard.append([InlineKeyboardButton(f"{available_total} Questions", callback_data=f"qcount_{available_total}")])
+            # Fix dynamic question button labels
+            keyboard.append([
+                InlineKeyboardButton(f"{available_total} Questions", callback_data=f"qcount_{available_total}")
+            ])
+            # If less than 5 questions, always allow custom
             keyboard.append([InlineKeyboardButton("✍️ Custom", callback_data="qcount_custom")])
 
         keyboard.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="sub_math")])
@@ -379,6 +399,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count_val = int(data.split("_")[1])
         context.user_data['quiz_index'] = 0
         context.user_data['answers'] = {}
+        # Ensure q_count doesn't exceed total questions
         context.user_data['q_count'] = min(count_val, len(SAMPLE_QUESTIONS))
         context.user_data['quiz_in_progress'] = True
         context.user_data.pop('waiting_for_custom_count', None)
@@ -393,15 +414,15 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("ans_"):
         parts = data.split("_")
-        q_idx = int(parts[1])
+        current_idx = int(parts[1])
         ans_idx = int(parts[2])
 
         answers = context.user_data.get('answers', {})
-        answers[q_idx] = ans_idx
+        answers[current_idx] = ans_idx
         context.user_data['answers'] = answers
 
-        # Advance quiz index cleanly
-        context.user_data['quiz_index'] = q_idx + 1
+        # Advance quiz index cleanly based on the *current* question index
+        context.user_data['quiz_index'] = current_idx + 1
         await render_question(update, context)
 
     elif data.startswith("nav_"):
@@ -428,51 +449,34 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if not text.isdigit():
         prompt_msg = STRINGS[lang]['invalid_count'].format(available_total)
         keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="unit_1")]]
-        if update.callback_query:
-            await edit_or_send(update, prompt_msg, InlineKeyboardMarkup(keyboard))
-        else:
-            # Send/edit clean warning message
-            if 'prompt_msg_id' in context.user_data:
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=update.effective_chat.id,
-                        message_id=context.user_data['prompt_msg_id'],
-                        text=prompt_msg,
-                        reply_markup=InlineKeyboardMarkup(keyboard),
-                        parse_mode="Markdown"
-                    )
-                except Exception:
-                    sent = await update.message.reply_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-                    context.user_data['prompt_msg_id'] = sent.message_id
-            else:
-                sent = await update.message.reply_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-                context.user_data['prompt_msg_id'] = sent.message_id
+        # Use a consistent edit/send logic for text input
+        sent = await update.message.reply_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        context.user_data['prompt_msg_id'] = sent.message_id
         return
 
     count_val = int(text)
     if count_val <= 0 or count_val > available_total:
         prompt_msg = STRINGS[lang]['invalid_count'].format(available_total)
         keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="unit_1")]]
+        # If a prompt is already shown, delete it and send a new one to avoid clutter
         if 'prompt_msg_id' in context.user_data:
             try:
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=context.user_data['prompt_msg_id'],
-                    text=prompt_msg,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="Markdown"
-                )
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data['prompt_msg_id'])
             except Exception:
-                sent = await update.message.reply_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-                context.user_data['prompt_msg_id'] = sent.message_id
-        else:
-            sent = await update.message.reply_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-            context.user_data['prompt_msg_id'] = sent.message_id
+                pass
+        sent = await update.message.reply_text(prompt_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        context.user_data['prompt_msg_id'] = sent.message_id
         return
 
-    # Valid count entered
+    # Valid custom count entered
     context.user_data.pop('waiting_for_custom_count', None)
-    context.user_data.pop('prompt_msg_id', None)
+    if 'prompt_msg_id' in context.user_data:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data['prompt_msg_id'])
+        except Exception:
+            pass
+        context.user_data.pop('prompt_msg_id', None)
+        
     context.user_data['quiz_index'] = 0
     context.user_data['answers'] = {}
     context.user_data['q_count'] = count_val
@@ -497,10 +501,12 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q_text = q_data['question']
     options = q_data['options']
 
+    # Display question text and options fully in message body
     msg_body = f"📍 ({idx + 1}/{q_count})\n\n**{q_text}**\n\n"
     for opt in options:
         msg_body += f"{opt}\n"
 
+    # Inline keyboard contains choice buttons [ ✅/A ] [ B ] [ C ] [ D ]
     keyboard = []
     opt_row = []
     for opt_idx, opt in enumerate(options):
@@ -510,6 +516,7 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard.append(opt_row)
 
+    # NO Next button. Only Prev button if idx > 0.
     nav_row = []
     if idx > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"nav_{idx-1}"))
@@ -532,6 +539,7 @@ async def render_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     review_text = STRINGS[lang]['review_title']
 
     for idx in range(q_count):
+        # Additional safety check for loop range
         if idx >= len(SAMPLE_QUESTIONS):
             break
         q_data = SAMPLE_QUESTIONS[idx]
