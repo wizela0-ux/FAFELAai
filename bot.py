@@ -155,11 +155,14 @@ async def delete_user_message(update: Update):
 
 
 async def edit_or_send(update: Update, text: str, reply_markup=None):
-    """ Cleans chat by replacing current message or sending new one """
+    """ Cleans chat by replacing current message or sending new one safely """
     query = update.callback_query
     if query:
         await query.answer()
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+        try:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception:
+            pass
     else:
         await delete_user_message(update)
         await update.message.reply_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -169,6 +172,7 @@ async def edit_or_send(update: Update, text: str, reply_markup=None):
 # 5. COMMAND & MENU HANDLERS
 # ==========================================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await delete_user_message(update)
     lang = context.user_data.get('lang')
     if not lang:
         await cmd_lang(update, context)
@@ -177,6 +181,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await delete_user_message(update)
     keyboard = [
         [InlineKeyboardButton("🇪🇹 አማርኛ", callback_data="lang_am")],
         [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
@@ -211,6 +216,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await delete_user_message(update)
     lang = context.user_data.get('lang', 'am')
     
     if context.user_data.get('quiz_in_progress') and not context.user_data.get('bypassed_active_check'):
@@ -333,24 +339,28 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_grade = context.user_data.get('selected_grade')
         context.user_data['selected_sub'] = sub_code
 
-        # Common Maths for both Natural and Social streams in Grade 11 & 12
+        # Common Maths for both Natural and Social streams in Grade 11 & 12, or Grade 9/10 maths
         is_grade_11_or_12 = current_grade in ["11", "12"]
-        is_common_maths = (sub_code == "sub_math" and is_grade_11_or_12)
+        is_common_maths = (sub_code == "sub_math" and (is_grade_11_or_12 or current_grade in ["9", "10"]))
 
         if is_common_maths:
+            back_callback = f"stream_{context.user_data.get('selected_stream')}" if is_grade_11_or_12 else f"grade_{current_grade}"
             keyboard = [
                 [InlineKeyboardButton("📖 Unit 1: Sequences & Series", callback_data="unit_1")],
                 [InlineKeyboardButton("📖 Unit 2 (Not Released)", callback_data="unit_empty")],
-                [InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"stream_{context.user_data.get('selected_stream')}")],
+                [InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=back_callback)],
                 [InlineKeyboardButton(STRINGS[lang]['btn_main_menu'], callback_data="main_menu")]
             ]
             await edit_or_send(update, STRINGS[lang]['select_unit'], InlineKeyboardMarkup(keyboard))
         else:
-            keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=f"stream_{context.user_data.get('selected_stream')}")]]
+            back_callback = f"stream_{context.user_data.get('selected_stream')}" if is_grade_11_or_12 else f"grade_{current_grade}"
+            keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=back_callback)]]
             await edit_or_send(update, STRINGS[lang]['no_questions'], InlineKeyboardMarkup(keyboard))
 
     elif data == "unit_empty":
-        keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="sub_math")]]
+        current_grade = context.user_data.get('selected_grade')
+        back_callback = "sub_math"
+        keyboard = [[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data=back_callback)]]
         await edit_or_send(update, STRINGS[lang]['no_questions'], InlineKeyboardMarkup(keyboard))
 
     elif data == "unit_1":
@@ -471,7 +481,6 @@ async def render_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answers = context.user_data.get('answers', {})
     q_count = context.user_data.get('q_count', len(SAMPLE_QUESTIONS))
 
-    # FIX: Check if quiz is completed strictly based on user's chosen question count or available questions limit
     if idx >= q_count or idx >= len(SAMPLE_QUESTIONS):
         context.user_data.pop('quiz_in_progress', None)
         await render_summary(update, context)
